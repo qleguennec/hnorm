@@ -1,33 +1,45 @@
 module C.Parse where
 
 import C.Def
-import Text.Parsec
-import Text.ParserCombinators.Parsec
-import qualified Text.ParserCombinators.Parsec.Token as T
+import Control.Monad
+import Control.Applicative
+import Text.Megaparsec
+import Text.Megaparsec.ByteString
+import qualified Text.Megaparsec.Lexer as L
 
-parsePtrs = length <$> many (char '*')
+lexeme = (*>) (many spaceChar)
 
-parseType = do
-  typename <- identifier
-  whiteSpace
-  typeptrs <- parsePtrs
-  return $ CType typename typeptrs
+line = manyTill anyChar newline <?> "line"
 
-parseVar = do
-  vartype <- parseType
-  whiteSpace
-  varname <- identifier
-  return $ CVar vartype varname
+ptr = many $ char '*'
 
-parseCPreproc = char '#' >> TlPreproc <$> identifier
+parens = between (char '(') (char ')')
 
-parseCFunc = do
-  functype <- parseType
-  whiteSpace
-  args <- parens (many parseVar)
-  char '{'
-  declas <- many parseVar
-  return $ TlFunc $ CFunc functype args declas
+sep = oneOf ";,("
+
+valid = some $ lowerChar <|> char '_'
+
+identifier = label "identifier" $ lexeme $ (++) <$> ptr <*> valid
+
+ctype = label "type" $ lexeme $ valid
+
+parseCVar = label "variable" $ liftA2 CVar (many $ try ctype <* notFollowedBy sep) identifier
+
+parseComment =
+  label "comment" $
+  TlComment <$>
+  do string "/*"
+     ret <- many $ notFollowedBy (string "*/") *> anyChar
+     string "*/"
+     return ret
+
+parsePreproc = TlPreproc <$> (char '#' *> line)
+
+parseCFunc =
+  label "c function" $
+  TlFunc <$>
+  (CFunc <$> parseCVar <*> (parens $ many parseCVar) <*> (lexeme (char '{') *> many parseCVar))
 
 parseTopLevel :: Parser TopLevelToken
-parseTopLevel = whiteSpace >> (parseCFunc <|> parseCPreproc)
+parseTopLevel =
+  label "top level" $ dbg "toplvl" $ (lexeme (parseComment <|> parsePreproc <|> parseCFunc))
